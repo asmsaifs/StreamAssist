@@ -55,7 +55,7 @@ class OptionsFlowHandler(OptionsFlow):
         stages = {p: p.upper() for p in STAGES}
 
         defaults = self.config_entry.options.copy()
-        defaults.setdefault("vad_mode", VAD.vad_mode)
+        # defaults.setdefault("vad_mode", VAD.vad_mode)
         defaults.setdefault("vad_speech_seconds", VAD.speech_seconds)
         defaults.setdefault("vad_silence_seconds", VAD.silence_seconds)
         defaults.setdefault("vad_timeout_seconds", VAD.timeout_seconds)

@@ -4,6 +4,10 @@ import logging
 from datetime import timedelta
 from typing import AsyncIterable, Callable
 
+import asyncio
+from collections import deque
+from collections.abc import AsyncIterable, MutableSequence, Sequence
+
 from homeassistant.components import assist_pipeline, stt
 from homeassistant.components import media_player
 from homeassistant.components.assist_pipeline import (
@@ -14,7 +18,12 @@ from homeassistant.components.assist_pipeline import (
     PipelineEventType,
     Pipeline,
 )
-from homeassistant.components.assist_pipeline.vad import VoiceCommandSegmenter
+from homeassistant.components.assist_pipeline.vad import (
+    AudioBuffer,
+    VoiceCommandSegmenter,
+    WebRtcVad,
+    VoiceActivityDetector
+)
 from homeassistant.components.switch import SwitchEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import STATE_STANDBY, STATE_IDLE
@@ -95,7 +104,9 @@ class StreamAssistSwitch(SwitchEntity, Stream):
     async def audio_stream(self, on_finish: Callable = None) -> AsyncIterable[bytes]:
         # init VAD first time
         if not self.vad:
-            self.vad = VoiceCommandSegmenter()
+            self.vad = VoiceCommandSegmenter(silence_seconds=self.options["vad_silence_seconds"])
+            _vad = WebRtcVad()
+            # self.vad = VoiceCommandSegmenter()
 
             for k, v in self.options.items():
                 if k == "vad_mode":
@@ -106,15 +117,25 @@ class StreamAssistSwitch(SwitchEntity, Stream):
         in_command = None
         async_dispatcher_send(self.hass, self.uid + "-vad", STATE_STANDBY)
 
+        chunk_buffer: deque[bytes] = deque(maxlen=100)
+        assert _vad.samples_per_chunk is not None
+        vad_buffer = AudioBuffer(_vad.samples_per_chunk * 2)
+        
         while chunk := await self.audio_queue.get():
-            if not self.vad.process(chunk):
-                break  # Voice command is finished
+            chunk_buffer.append(chunk)
+            # if self.vad.process_with_vad(chunk, _vad, vad_buffer):
+            #     break  # Voice command is finished
+            self.vad.process_with_vad(chunk, _vad, vad_buffer)
+            if self.vad.in_command:
+                # Buffer until command starts
+                if len(vad_buffer) > 0:
+                    chunk_buffer.append(vad_buffer.bytes())
 
-            if in_command != self.vad.in_command:
-                in_command = self.vad.in_command
-                async_dispatcher_send(
-                    self.hass, self.uid + "-vad", "voice" if in_command else "silence"
-                )
+                if in_command != self.vad.in_command:
+                    in_command = self.vad.in_command
+                    async_dispatcher_send(
+                        self.hass, self.uid + "-vad", "voice" if in_command else "silence"
+                    )
 
             yield chunk
 
